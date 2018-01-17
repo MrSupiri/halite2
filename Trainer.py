@@ -1,63 +1,27 @@
-import os
 import random
-import shutil
-import time
-import traceback
+import subprocess
+import json
 from datetime import datetime
-
-ship_requirement = 10
-damage_requirement = 1000
-
-
-def get_ships(data):
-    return int(data.split("producing ")[1].split(" ships")[0])
+import time
+import os
 
 
-def get_damage(data):
-    return int(data.split("dealing ")[1].split(" damage")[0])
+def run(command):
+    p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
+    (output, err) = p.communicate()
+    p_status = p.wait()
+    return output, p_status
 
 
-def get_rank(data):
-    return int(data.split("rank #")[1].split(" and")[0])
+def play(hm_bots=2):
+    cmd = 'halite.exe -d "{}"'.format(random.choice(map_sizes))
+    for ii in range(hm_bots):
+        cmd += ' "{}"'.format(bots[ii])
+    cmd += ' --replaydirectory "replays" -t -q'
+    output, _ = run(cmd)
 
+    return json.loads(output, encoding='ascii')
 
-def find_line(data):
-    for idx, line in enumerate(data):
-        if 'and was last alive on frame' in line:
-            return idx
-
-
-def get_data(hm):
-    # noinspection PyBroadException
-    try:
-        data = []
-        f = open('data.gameout', 'r')
-        contents = f.readlines()
-        f.close()
-        ln = find_line(contents)
-        for k in range(hm):
-            data.append(contents[ln + k][:-2])
-        return data
-    except:
-        time.sleep(1)
-        get_data(hm)
-
-
-def cleanup():
-    # noinspection PyBroadException
-    try:
-        if os.path.exists('model/TrainingBot_1'):
-            shutil.rmtree('model/TrainingBot_1')
-        if os.path.exists('model/TrainingBot_2'):
-            shutil.rmtree('model/TrainingBot_2')
-    except:
-        time.sleep(1)
-        cleanup()
-
-
-AI_wins = 0
-dummy_wins = 0
-i = 0
 
 map_sizes = ['312 208',
              '240 160',
@@ -66,108 +30,72 @@ map_sizes = ['312 208',
              '288 192',
              '264 176',
              '288 192']
-
-bots = ['python MyBot.py TrainingBot_1',
-        'python MyBot.py TrainingBot_2',
-        'python SentdeBot.py',
-        'python Training_Dummy.py']
-
+bots = ['D:/virtualenv/DataScience/Scripts/python MyBot.py TrainingBot_1',
+        'D:/virtualenv/DataScience/Scripts/python MyBot.py TrainingBot_2',
+        'D:/virtualenv/DataScience/Scripts/python SentdeBot.py',
+        'D:/virtualenv/DataScience/Scripts/python Training_Dummy.py']
+AIWins = 0
+BotWins = 0
+i = 1
 while True:
+    winner = None
+    if os.path.exists('models/TrainingBot_1.h5'):
+        os.remove('models/TrainingBot_1.h5')
+    if os.path.exists('models/TrainingBot_2.h5'):
+        os.remove('models/TrainingBot_2.h5')
+
+    if len([True for i in os.listdir('./') if i.endswith('.log')]) > 0:
+        run('del *.log')
+    if random.randint(0, 2) == 0:
+        print('\n', datetime.now(), 'Starting 4 Player DeathMatch')
+        log = play(4)
+    else:
+        print('\n', datetime.now(), 'Starting 1v1 DeathMatch')
+        log = play(2)
+
+    if log['error_logs']:
+        print('There Was Error While Playing voiding the game in')
+        for i in range(5, 0, -1):
+            print(i)
+            time.sleep(1)
+        run('del *.log')
+        continue
+
+    if int(log['stats']['0']['rank']) == 1:
+        if len(log['stats']) == 4:
+            AIWins += 1
+        winner = 'TrainingBot_1'
+    elif int(log['stats']['1']['rank']) == 1:
+        if len(log['stats']) == 4:
+            AIWins += 1
+        winner = 'TrainingBot_2'
+    else:
+        BotWins += 1
+
     try:
-        if os.path.isfile('data.gameout'):
-            os.system('del /f data.gameout')
-        if len([True for i in os.listdir('./') if i.endswith('.log')]) > 0:
-            os.system('del /f *.log')
-        winner = None
-        if AI_wins > 0 or dummy_wins > 0:
-            p1_pct = round(AI_wins / (AI_wins + dummy_wins) * 100.0, 2)
-            p2_pct = round(dummy_wins / (AI_wins + dummy_wins) * 100.0, 2)
-            print("{}, Games {}, AI Wins: {} WR: {}, Dummy Wins: {} WR: {}".format(datetime.now(), i, AI_wins, p1_pct,
-                                                                                   dummy_wins, p2_pct))
-        cleanup()
+        p1_pct = round(AIWins / (AIWins + BotWins) * 100.0, 2)
+        p2_pct = round(BotWins / (AIWins + BotWins) * 100.0, 2)
+    except ZeroDivisionError:
+        p1_pct = 0
+        p2_pct = 0
 
-        if i % 2 == 0:
-            cmd = 'activate.bat && halite.exe -d "{}" "{}" "{}" --replaydirectory "replays" >> data.gameout'.format(
-                random.choice(map_sizes), bots[0], bots[1])
-            print('Starting 1v1 Game')
-            os.system(cmd)
-            player = get_data(2)
-            print(player[0])
-            print(player[1])
+    print("Games {}, AI Wins: {} WR: {}, Dummy Wins: {} WR: {}".format(i, AIWins, p1_pct,
+                                                                       BotWins, p2_pct))
 
-            AI1_ships = get_ships(player[0])
-            AI1_dmg = get_damage(player[0])
-            AI1_rank = get_rank(player[0])
+    for bot in log['stats']:
+        p = log['stats'][bot]
+        print('Bot #{}, Rank {}, Avg Response Time {}, Damage Dealt {}, Last Alive {}, Ship Count {}'
+              .format(bot, p['rank'], round(float(p['average_frame_response_time']), 2), p['damage_dealt'],
+                      p['last_frame_alive'], p['total_ship_count']))
 
-            AI2_ships = get_ships(player[1])
-            AI2_dmg = get_damage(player[1])
-            AI2_rank = get_rank(player[1])
+    if winner is not None:
+        if os.path.exists('models/{}.h5'.format(winner)):
+            if os.path.exists('models/ProjectFaker.h5'):
+                os.remove('models/ProjectFaker.h5')
+            os.rename('models/{}.h5'.format(winner), 'models/ProjectFaker.h5')
+            print('Model was Updated to {} weights'.format(winner))
+    else:
+        print('A dummy won the game shame on you Supiri -_-')
 
-            if AI1_rank == 1:
-                winner = 'TrainingBot_1'
-            elif AI2_rank == 1:
-                winner = 'TrainingBot_2'
-        else:
-            cmd = 'activate.bat && halite.exe -d "{}" "{}" "{}" "{}" "{}" --replaydirectory "replays" >> data.gameout' \
-                .format(random.choice(map_sizes), bots[0], bots[1], bots[2], bots[3])
-            print('Starting 4 People DeathMatch')
-            os.system(cmd)
-            player = get_data(4)
-            print(player[0])
-            print(player[1])
-            print(player[2])
-            print(player[3])
+    i += 1
 
-            AI1_ships = get_ships(player[0])
-            AI1_dmg = get_damage(player[0])
-            AI1_rank = get_rank(player[0])
-
-            AI2_ships = get_ships(player[1])
-            AI2_dmg = get_damage(player[1])
-            AI2_rank = get_rank(player[1])
-
-            Dummy1_ships = get_ships(player[2])
-            Dummy1_dmg = get_damage(player[2])
-            Dummy1_rank = get_rank(player[2])
-
-            Dummy2_ships = get_ships(player[3])
-            Dummy2_dmg = get_damage(player[3])
-            Dummy2_rank = get_rank(player[3])
-
-            if Dummy1_rank == 1 or Dummy2_rank == 1:
-                dummy_wins += 1
-            else:
-                AI_wins += 1
-                if AI1_rank == 1:
-                    winner = 'TrainingBot_1'
-                elif AI2_rank == 1:
-                    winner = 'TrainingBot_2'
-
-        time.sleep(1.5)
-        if winner is not None:
-            if winner == 'TrainingBot_1' and AI1_ships < ship_requirement and AI1_dmg < damage_requirement:
-                i += 1
-                print('Not Saving because Winner {} Do not have requirements'.format(winner))
-                continue
-            if winner == 'TrainingBot_2' and AI2_ships < ship_requirement and AI2_dmg < damage_requirement:
-                i += 1
-                print('Not Saving because Winner {} Do not have requirements'.format(winner))
-                continue
-            if os.path.exists('model/{}'.format(winner)):
-                if os.path.exists('model/ProjectFaker'):
-                    shutil.rmtree('model/ProjectFaker')
-                shutil.move('model/{}'.format(winner), 'model/ProjectFaker')
-                for file in os.listdir('model/ProjectFaker'):
-                    newname = str(file).replace(winner, 'ProjectFaker')
-                    os.rename('model/ProjectFaker/' + file, 'model/ProjectFaker/' + newname)
-                print('Model was Updated to {} weights'.format(winner))
-        else:
-            print('A dummy won the game shame on you AI =_=')
-        i += 1
-        print(' ')
-
-    except Exception as e:
-        print(str(e))
-        traceback.print_exc()
-        time.sleep(5)
-        print(' ')

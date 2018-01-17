@@ -1,8 +1,13 @@
+import sys
+import os
+__stderr = sys.stderr
+sys.stderr = open(os.devnull, 'w')
 import logging
 import random
 from collections import OrderedDict
 import numpy as np
 import hlt
+sys.stdout = __stderr
 
 
 HM_ENT_FEATURES = 5
@@ -198,6 +203,8 @@ while True:
             try:
                 # ATTACK ENEMY SHIP
                 if np.argmax(output_vector) == 0:  # [1,0,0]
+                    if not closest_enemy_ships:
+                        continue
                     if not isinstance(closest_enemy_ships[0], int):
                         navigate_command = ship.navigate(
                             ship.closest_point_to(closest_enemy_ships[0]),
@@ -212,6 +219,8 @@ while True:
 
                 # MINE ONE OF OUR PLANETS
                 elif np.argmax(output_vector) == 1:
+                    if not closest_my_planets:
+                        continue
                     if not isinstance(closest_my_planets[0], int):
                         target = closest_my_planets[0]
                         # noinspection PyProtectedMember
@@ -232,6 +241,8 @@ while True:
 
                 # FIND AND MINE AN EMPTY PLANET
                 elif np.argmax(output_vector) == 2:
+                    if not closest_empty_planets:
+                        continue
                     if not isinstance(closest_empty_planets[0], int):
                         target = closest_empty_planets[0]
                         if ship.can_dock(target):

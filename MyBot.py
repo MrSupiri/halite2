@@ -1,39 +1,44 @@
+import sys
+from Models import DQNAgent
 import logging
 from collections import OrderedDict
 import hlt
-from Models import *
-import sys
+import random
+import numpy as np
 import atexit
-
-HM_ENT_FEATURES = 5
-PCT_CHANGE_CHANCE = 30
-DESIRED_SHIP_COUNT = 25
 
 MODEL_NAME = "ProjectFaker"
 
 if len(sys.argv) == 2:
     MODEL_NAME = str(sys.argv[1])
 
-AI = SupiriNet(MODEL_NAME=MODEL_NAME, IN_SIZE=60, OUT_SIZE=3)
-atexit.register(AI.save)
-LOSS = abs(AI.get_loss())
+agent = DQNAgent(MODEL_NAME, 60, 3)
+atexit.register(agent.save)
+HM_ENT_FEATURES = 5
+PCT_CHANGE_CHANCE = 30
+DESIRED_SHIP_COUNT = 999
+
 game = hlt.Game(MODEL_NAME)
 
-logging.info("Starting {}, Current Loss {}".format(MODEL_NAME, LOSS))
-logging.info('Model Loaded = {}'.format(AI.model_loaded))
+logging.info("Starting {}".format(MODEL_NAME))
+logging.info('Model Loaded = {}'.format(agent.model_loaded))
 
 ship_plans = {}
+state_action = {}
+batch_size = 32
+remember = {}
+score = 0
 
 
-def calculateLoss(score):
-    a = (enemy_ship_count - _enemy_ship_count) * 0.05
-    b = (_my_ship_count - my_ship_count) * 0.25
-    c = (hm_enemy_planets - _hm_enemy_planets) * 0.1
-    d = (_hm_our_planets - hm_our_planets) * 0.25
-    _e = (len(ship_plans) + docked_ships - _my_ship_count) * 1.5
-    score += a + b + c + d + _e
-    logging.debug('Loss in Depth {}, {}, {}, {}, {} = {}'.format(a, b, c, d, _e, score))
-    return abs(score)
+def calculateScore():
+    a = (_enemy_ship_count - enemy_ship_count) * 0.1
+    b = (my_ship_count - _my_ship_count) * 0.4
+    c = (_hm_enemy_planets - hm_enemy_planets) * 0.25
+    d = (hm_our_planets - _hm_our_planets) * 1
+    # _e = (_my_ship_count - (len(ship_plans) + docked_ships)) * 1.5
+    _score = a + b + c + d
+    # logging.debug('Loss in Depth {}, {}, {}, {} = {}'.format(a, b, c, d, _score))
+    return _score
 
 
 def key_by_value(dictionary, value):
@@ -115,17 +120,15 @@ def go2Closest_EmptyPlanets(ship_):
 
 
 def doAction(preferred_action, ship_):
+    global output_vector
     if not preferred_action(ship_):
+        output_vector = [0, 0, 1]
         if not go2Closest_EmptyPlanets(ship_):
+            output_vector = [1, 0, 0]
             if not go2Closest_EnemyShip(ship_):
+                output_vector = [0, 1, 0]
                 if not go2Closest_MyPlanets(ship_):
                     pass
-            else:
-                pass
-        else:
-            pass
-    else:
-        pass
 
 
 def game_step(game_mp):
@@ -185,8 +188,8 @@ while True:
                                      isinstance(entities_by_distance[distance][0], hlt.entity.Planet) and not
                                      entities_by_distance[distance][0].is_owned()]
             closest_empty_planet_distances = [distance for distance in entities_by_distance if
-                                              isinstance(entities_by_distance[distance][0], hlt.entity.Planet) and not
-                                              entities_by_distance[distance][0].is_owned()]
+                                              isinstance(entities_by_distance[distance][0], hlt.entity.Planet) and
+                                              not entities_by_distance[distance][0].is_owned()]
 
             closest_my_planets = [entities_by_distance[distance][0] for distance in entities_by_distance if
                                   isinstance(entities_by_distance[distance][0], hlt.entity.Planet) and
@@ -269,22 +272,31 @@ while True:
                              hm_our_planets,
                              hm_empty_planets,
                              hm_enemy_planets]
+            input_vector = np.array(input_vector).reshape([-1, 60])
             if my_ship_count > DESIRED_SHIP_COUNT:
                 # ATTACK ENEMY CUZ TOO MANY SHIPS
                 output_vector = 3 * [0]  # [0,0,0]
                 output_vector[0] = 1  # [1,0,0]
                 ship_plans[ship.id] = [1, 0, 0]
+                state_action[ship.id] = [input_vector, output_vector]
 
             elif change or ship.id not in ship_plans:
                 # PICK A NEW PLAN
-                output_vector = AI.predict(np.array(input_vector).reshape([-1, 60]))
+                if ship.id in state_action:
+                    remember[ship.id] = [state_action[ship.id][0], state_action[ship.id][1], input_vector]
+                    output_vector = agent.act(input_vector)
+                else:
+                    output_vector = agent.act(input_vector)
+                    # logging.debug('Ship {} is not in the dict'.format(ship.id))
+                state_action[ship.id] = [input_vector, output_vector]
                 ship_plans[ship.id] = output_vector
 
             else:
                 # DO WHAT EVERY YOU HAVE BEEN DOING
                 output_vector = ship_plans[ship.id]
+                state_action[ship.id] = [input_vector, output_vector]
 
-            logging.debug('ArgMax = {0}'.format(str(np.argmax(output_vector))))
+            # logging.debug('Ship {}, In {}, Out {}'.format(ship.id, input_vector.tolist(), output_vector))
 
         except Exception as e:
             logging.exception(str(e))
@@ -305,9 +317,6 @@ while True:
         except Exception as e:
             logging.exception(str(e))
 
-    game.send_command_queue(command_queue)
-
-    _game_map = game_map
     _hm_our_planets = hm_our_planets
     _hm_empty_planets = hm_empty_planets
     _hm_enemy_planets = hm_enemy_planets
@@ -315,10 +324,19 @@ while True:
     _enemy_ship_count = enemy_ship_count
     _all_ship_count = all_ship_count
 
+    game.send_command_queue(command_queue)
+
     game_map = game.update_map()
     game_step(game_map)
 
-    LOSS = float(calculateLoss(LOSS))
-    AI.learn(np.array(np.array(LOSS)))
-    LOSS -= LOSS / 3
-    AI.update_loss(np.array(np.array(LOSS)))
+    score = calculateScore()
+    for r in remember:
+        try:
+            reminder = remember[r]
+            agent.remember(reminder[0], np.argmax(reminder[1]), score, reminder[2])
+        except Exception as e:
+            logging.exception(e)
+
+    if len(agent.memory) > batch_size:
+        logging.debug('Replying and Fitting to the Memory, Memory Size = {}'.format(len(agent.memory)))
+        agent.replay(batch_size)
